@@ -1,17 +1,3 @@
-// # Basic Example
-//
-// This example covers the basic functionalities of
-// tantivy.
-//
-// We will :
-// - define our schema
-// - create an index in a directory
-// - index a few documents into our index
-// - search for the best document matching a basic query
-// - retrieve the best document's original content.
-
-// ---
-// Importing tantivy...
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
@@ -35,6 +21,14 @@ use std::fs::OpenOptions;
 use std::io::prelude::*;
 
 static OUTPUT: &str = "output.txt";
+
+struct Lexicon {
+    dir_name: String,
+    file_name: String,
+    repo_url: String,
+    start_rng: u32,
+    end_rng: u32,
+}
 
 fn read_xml(file: &str, item_count: &mut u32) {
     //println!("file: {}", file);
@@ -181,7 +175,7 @@ fn read_xml(file: &str, item_count: &mut u32) {
                         item_text.push_str("</div>");
                         //println!("item: {}", item_text);
                         if in_text_tag && item_text.len() > 6 {
-                            writeln!(file, "{}", item_text).unwrap();
+                            //writeln!(file, "{}", item_text).unwrap();
                         }
                         head.clear();
                         orth.clear();
@@ -190,8 +184,8 @@ fn read_xml(file: &str, item_count: &mut u32) {
                     b"div2" => {
                         item_text.push_str("</div>");
                         //println!("item: {}", item_text);
-                        *item_count += 1;
                         if in_text_tag && item_text.len() > 6 {
+                            *item_count += 1;
                             writeln!(file, "{}", item_text).unwrap();
                         }
                         head.clear();
@@ -246,31 +240,30 @@ fn main() -> tantivy::Result<()> {
         fs::remove_file(OUTPUT).expect("File delete failed");
     }
 
-    let repo_path = "LSJLogeion/";
-    let repo_url = "https://github.com/helmadik/LSJLogeion.git";
-    let mut count = 0;
+    let lsj = Lexicon {
+        dir_name: "LSJLogeion/".to_string(),
+        file_name: "greatscott".to_string(),
+        repo_url: "https://github.com/helmadik/LSJLogeion.git".to_string(),
+        start_rng: 2,
+        end_rng: 86,
+    };
 
-    if !Path::new(repo_path).exists() {
-        println!("Cloning {}...", repo_url);
+    let mut item_count = 0;
 
-        //https://docs.rs/git2/0.16.1/git2/
-        let _repo = match Repository::clone(repo_url, repo_path) {
+    if !Path::new(&lsj.dir_name).exists() {
+        println!("Cloning {}...", lsj.repo_url);
+
+        let _repo = match Repository::clone(&lsj.repo_url, &lsj.dir_name) {
             Ok(repo) => repo,
             Err(e) => panic!("failed to clone: {}", e),
         };
     }
 
-    for entry in fs::read_dir(repo_path).expect("Unable to list") {
-        let entry = entry.expect("unable to get entry");
-        //println!( "{}", entry.path().display() );
-
-        if let Some(path) = entry.path().to_str() {
-            if path.ends_with(".xml") && !path.ends_with("greatscott01.xml") {
-                read_xml(path, &mut count);
-            }
-        }
+    for i in lsj.start_rng..=lsj.end_rng {
+        let path = format!("{}{}{:02}.xml", lsj.dir_name, lsj.file_name, i);
+        read_xml(&path, &mut item_count);
     }
-    println!("items: {}", count);
+    println!("items: {}", item_count);
 
     // Let's create a temporary directory for the
     // sake of this example
