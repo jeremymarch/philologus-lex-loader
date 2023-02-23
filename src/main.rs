@@ -20,16 +20,21 @@ use tempfile::TempDir;
 
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
+use quick_xml::name::QName;
 
-extern crate git2;
 use git2::Repository;
 use std::path::Path;
 use std::fs;
 
-use quick_xml::events::BytesStart;
-use std::io::Cursor;
-use quick_xml::Writer;
-use quick_xml::events::BytesEnd;
+// use quick_xml::events::BytesStart;
+// use std::io::Cursor;
+// use quick_xml::Writer;
+// use quick_xml::events::BytesEnd;
+
+use std::fs::OpenOptions;
+use std::io::prelude::*;
+
+static OUTPUT:&str = "output.txt";
 
 
 fn read_xml(file:&str, item_count:&mut u32) {
@@ -37,10 +42,24 @@ fn read_xml(file:&str, item_count:&mut u32) {
     let mut reader = Reader::from_file(file).unwrap();
     reader.trim_text(true);
 
-    //let mut txt = Vec::new();
     let mut buf = Vec::new();
-    //let mut item_text = String::new("");
-    let mut writer = Writer::new(Cursor::new(Vec::new()));
+
+    let mut item_text = String::from("");
+    let mut head = String::from("");
+    let mut orth = String::from("");
+
+    let mut sense_count = 0;
+    let mut in_orth_tag = false;
+    let mut in_head_tag = false;
+    let mut in_text_tag = false;
+    
+
+    let mut file = OpenOptions::new()
+        .append(true)
+        .create(true)
+        .open(OUTPUT)
+        .unwrap();
+
     loop {
         match reader.read_event_into(&mut buf) {
             Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
@@ -53,57 +72,174 @@ fn read_xml(file:&str, item_count:&mut u32) {
 
             Ok(Event::Start(e)) => {
                 match e.name().as_ref() {
+                    b"text" => {
+                        in_text_tag = true;
+                    },
+                    b"head" => {
+                        in_head_tag = true;
+                    },
+                    b"orth" => {
+                        in_orth_tag = true;
+                        item_text.push_str(r#"<span class="orth">"#);
+                    },
                     b"div1" => { 
-                        writer = Writer::new(Cursor::new(Vec::new()));
-                        let mut elem = BytesStart::new("div");
-                        
+                        head.clear();
+                        orth.clear();
+                        item_text.clear();
+                        sense_count = 0;
+                        item_text.push_str(r#"<div id=""#);
+                        let mut found_id = false;
+                        for a in e.attributes() {
+                            if a.as_ref().unwrap().key == QName(b"id") {
+                                found_id = true;
+                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                                break;
+                            }
+                        }
+                        item_text.push_str(r#"" class="body">"#);
+                        if !found_id {
+                            item_text.clear();
+                        }
                     },
                     b"div2" => { 
+                        head.clear();
+                        orth.clear();
+                        item_text.clear();
+                        sense_count = 0;
                         *item_count += 1;
-                        writer = Writer::new(Cursor::new(Vec::new()));
-                        let mut elem = BytesStart::new("div");
+                        item_text.push_str(r#"<div id=""#);
+                        let mut found_id = false;
+                        for a in e.attributes() {
+                            if a.as_ref().unwrap().key == QName(b"id") {
+                                found_id = true;
+                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                                break;
+                            }
+                        }
+                        item_text.push_str(r#"" class="body">"#);
+                        if !found_id {
+                            item_text.clear();
+                        }
                     },
-                    b"sense" => {  },
-                    b"sense-1" => {  },
-                    b"orth" => {  },
-                    b"author" => {  },
-                    b"quote" => {  },
-                    b"foreign" => {  },
-                    b"i" => {  },
-                    b"title" => {  },
-                    b"bibl" => {  },
+                    b"sense" => { 
+                        if sense_count == 0 {
+                            item_text.push_str(r#"<br/><br/><div class="l"#);
+                        }
+                        else {
+                            item_text.push_str(r#"<br/><div class="l"#);
+                        }
+                        let mut label = String::from("");
+                        for a in e.attributes() {
+                            if a.as_ref().unwrap().key == QName(b"level") {
+                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                            }
+                            else if a.as_ref().unwrap().key == QName(b"n") {
+                                label.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                            }
+                        }
+                        item_text.push_str(r#"">"#);
+                        if !label.is_empty() {
+                            item_text.push_str(format!(r#"<span class="label">{}.</span>"#, label).as_str());
+                        }
+                        sense_count += 1;
+                    },
+                    b"author" => { 
+                        item_text.push_str(r#"<span class="au">"#);
+                    },
+                    b"quote" => { 
+                        item_text.push_str(r#"<span class="qu">"#);
+                    },
+                    b"foreign" => { 
+                        item_text.push_str(r#"<span class="fo">"#);
+                    },
+                    b"i" => { 
+                        item_text.push_str(r#"<span class="tr">"#);
+                    },
+                    b"title" => { 
+                        item_text.push_str(r#"<span class="ti">"#);
+                    },
+                    b"bibl" => { 
+                        item_text.push_str(r#"<a class="bi" biblink=""#);
+                        for a in e.attributes() {
+                            if a.as_ref().unwrap().key == QName(b"n") {
+                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                                break;
+                            }
+                        }
+                        item_text.push_str(r#"">"#);
+                    },
                     _ => (),
                 }
             },
             Ok(Event::End(e)) => {
                 match e.name().as_ref() {
+                    b"text" => {
+                        in_text_tag = false;
+                    },
+                    b"head" => {
+                        in_head_tag = false;
+                    },
+                    b"orth" => { 
+                        in_orth_tag = false;
+                        item_text.push_str("</span>");
+                    },
                     b"div1" => {  
-                        writer.write_event(Event::End(BytesEnd::new("div")));
-                        let result = writer.into_inner().into_inner();
-                        println!("word: {:?}", result);
+                        item_text.push_str("</div>");
+                        //println!("item: {}", item_text);
+                        if in_text_tag {
+                            writeln!(file, "{}", item_text).unwrap();
+                        }
+                        head.clear();
+                        orth.clear();
+                        item_text.clear();
                     },
                     b"div2" => {
-                        writer.write_event(Event::End(BytesEnd::new("div")));
-                        let result = writer.into_inner().into_inner();
-                        println!("word: {:?}", result);
+                        item_text.push_str("</div>");
+                        //println!("item: {}", item_text);
+                        if in_text_tag {
+                            writeln!(file, "{}", item_text).unwrap();
+                        }
+                        head.clear();
+                        orth.clear();
+                        item_text.clear();
                     },
-                    b"sense" => {  },
-                    b"sense-1" => {  },
-                    b"orth" => {  },
-                    b"author" => {  },
-                    b"quote" => {  },
-                    b"foreign" => {  },
-                    b"i" => {  },
-                    b"title" => {  },
-                    b"bibl" => {  },
+                    b"sense" => { 
+                        item_text.push_str("</div>");
+                    },
+                    b"author" => { 
+                        item_text.push_str("</span>");
+                    },
+                    b"quote" => { 
+                        item_text.push_str("</span>");
+                    },
+                    b"foreign" => { 
+                        item_text.push_str("</span>");
+                    },
+                    b"i" => { 
+                        item_text.push_str("</span>");
+                    },
+                    b"title" => { 
+                        item_text.push_str("</span>");
+                    },
+                    b"bibl" => { 
+                        item_text.push_str("</a>");
+                    },
                     _ => (),
                 }
             },
             Ok(Event::Empty(_e)) => {},
             Ok(Event::Text(e)) => {
                 //txt.push(e.unescape().unwrap().into_owned())
-                writer.write_event(Event::Text(e));
-                //writer.write_text_content(e.unescape().unwrap())
+                // if in_head_tag {
+
+                // }
+                if in_head_tag {
+                    head.push_str(&e.unescape().unwrap());
+                }
+                if in_orth_tag {
+                    orth.push_str(&e.unescape().unwrap());
+                }
+                item_text.push_str(&e.unescape().unwrap());
             },
         }
         buf.clear();
@@ -111,6 +247,11 @@ fn read_xml(file:&str, item_count:&mut u32) {
 }
 
 fn main() -> tantivy::Result<()> {
+
+    if Path::new(OUTPUT).is_file() {
+        fs::remove_file(OUTPUT).expect("File delete failed");
+    }
+
     let repo_path = "LSJLogeion/";
 	let repo_url = "https://github.com/helmadik/LSJLogeion.git";
     let mut count = 0;
@@ -130,7 +271,7 @@ fn main() -> tantivy::Result<()> {
         //println!( "{}", entry.path().display() );
 
         if let Some(path) = entry.path().to_str() {
-            if path.ends_with(".xml") {
+            if path.ends_with(".xml") && !path.ends_with("greatscott01.xml") {
                 read_xml(path, &mut count);
             }
         }
