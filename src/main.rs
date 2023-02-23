@@ -19,12 +19,12 @@ use tantivy::{doc, Index, ReloadPolicy};
 use tempfile::TempDir;
 
 use quick_xml::events::Event;
-use quick_xml::reader::Reader;
 use quick_xml::name::QName;
+use quick_xml::reader::Reader;
 
 use git2::Repository;
-use std::path::Path;
 use std::fs;
+use std::path::Path;
 
 // use quick_xml::events::BytesStart;
 // use std::io::Cursor;
@@ -34,10 +34,9 @@ use std::fs;
 use std::fs::OpenOptions;
 use std::io::prelude::*;
 
-static OUTPUT:&str = "output.txt";
+static OUTPUT: &str = "output.txt";
 
-
-fn read_xml(file:&str, item_count:&mut u32) {
+fn read_xml(file: &str, item_count: &mut u32) {
     //println!("file: {}", file);
     let mut reader = Reader::from_file(file).unwrap();
     reader.trim_text(true);
@@ -52,7 +51,6 @@ fn read_xml(file:&str, item_count:&mut u32) {
     let mut in_orth_tag = false;
     let mut in_head_tag = false;
     let mut in_text_tag = false;
-    
 
     let mut file = OpenOptions::new()
         .append(true)
@@ -64,170 +62,167 @@ fn read_xml(file:&str, item_count:&mut u32) {
         match reader.read_event_into(&mut buf) {
             Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
             Ok(Event::Eof) => break,
-            Ok(Event::Comment(_e)) => {},
-            Ok(Event::CData(_e)) => {},
-            Ok(Event::Decl(_e)) => {},
-            Ok(Event::PI(_e)) => {},
-            Ok(Event::DocType(_e)) => {},
+            Ok(Event::Comment(_e)) => {}
+            Ok(Event::CData(_e)) => {}
+            Ok(Event::Decl(_e)) => {}
+            Ok(Event::PI(_e)) => {}
+            Ok(Event::DocType(_e)) => {}
 
-            Ok(Event::Start(e)) => {
-                match e.name().as_ref() {
-                    b"text" => {
-                        in_text_tag = true;
-                    },
-                    b"head" => {
-                        in_head_tag = true;
-                    },
-                    b"orth" => {
-                        in_orth_tag = true;
-                        item_text.push_str(r#"<span class="orth">"#);
-                    },
-                    b"div1" => { 
-                        head.clear();
-                        orth.clear();
-                        item_text.clear();
-                        sense_count = 0;
-                        item_text.push_str(r#"<div id=""#);
-                        let mut found_id = false;
-                        for a in e.attributes() {
-                            if a.as_ref().unwrap().key == QName(b"id") {
-                                found_id = true;
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
-                                break;
-                            }
-                        }
-                        item_text.push_str(r#"" class="body">"#);
-                        if !found_id {
-                            item_text.clear();
-                        }
-                    },
-                    b"div2" => { 
-                        head.clear();
-                        orth.clear();
-                        item_text.clear();
-                        sense_count = 0;
-                        *item_count += 1;
-                        item_text.push_str(r#"<div id=""#);
-                        let mut found_id = false;
-                        for a in e.attributes() {
-                            if a.as_ref().unwrap().key == QName(b"id") {
-                                found_id = true;
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
-                                break;
-                            }
-                        }
-                        item_text.push_str(r#"" class="body">"#);
-                        if !found_id {
-                            item_text.clear();
-                        }
-                    },
-                    b"sense" => { 
-                        if sense_count == 0 {
-                            item_text.push_str(r#"<br/><br/><div class="l"#);
-                        }
-                        else {
-                            item_text.push_str(r#"<br/><div class="l"#);
-                        }
-                        let mut label = String::from("");
-                        for a in e.attributes() {
-                            if a.as_ref().unwrap().key == QName(b"level") {
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
-                            }
-                            else if a.as_ref().unwrap().key == QName(b"n") {
-                                label.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
-                            }
-                        }
-                        item_text.push_str(r#"">"#);
-                        if !label.is_empty() {
-                            item_text.push_str(format!(r#"<span class="label">{}.</span>"#, label).as_str());
-                        }
-                        sense_count += 1;
-                    },
-                    b"author" => { 
-                        item_text.push_str(r#"<span class="au">"#);
-                    },
-                    b"quote" => { 
-                        item_text.push_str(r#"<span class="qu">"#);
-                    },
-                    b"foreign" => { 
-                        item_text.push_str(r#"<span class="fo">"#);
-                    },
-                    b"i" => { 
-                        item_text.push_str(r#"<span class="tr">"#);
-                    },
-                    b"title" => { 
-                        item_text.push_str(r#"<span class="ti">"#);
-                    },
-                    b"bibl" => { 
-                        item_text.push_str(r#"<a class="bi" biblink=""#);
-                        for a in e.attributes() {
-                            if a.as_ref().unwrap().key == QName(b"n") {
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
-                                break;
-                            }
-                        }
-                        item_text.push_str(r#"">"#);
-                    },
-                    _ => (),
+            Ok(Event::Start(e)) => match e.name().as_ref() {
+                b"text" => {
+                    in_text_tag = true;
                 }
+                b"head" => {
+                    in_head_tag = true;
+                }
+                b"orth" => {
+                    in_orth_tag = true;
+                    item_text.push_str(r#"<span class="orth">"#);
+                }
+                b"div1" => {
+                    head.clear();
+                    orth.clear();
+                    item_text.clear();
+                    sense_count = 0;
+                    item_text.push_str(r#"<div id=""#);
+                    let mut found_id = false;
+                    for a in e.attributes() {
+                        if a.as_ref().unwrap().key == QName(b"id") {
+                            found_id = true;
+                            item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                            break;
+                        }
+                    }
+                    item_text.push_str(r#"" class="body">"#);
+                    if !found_id {
+                        item_text.clear();
+                    }
+                }
+                b"div2" => {
+                    head.clear();
+                    orth.clear();
+                    item_text.clear();
+                    sense_count = 0;
+                    item_text.push_str(r#"<div id=""#);
+                    let mut found_id = false;
+                    for a in e.attributes() {
+                        if a.as_ref().unwrap().key == QName(b"id") {
+                            found_id = true;
+                            item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                            break;
+                        }
+                    }
+                    item_text.push_str(r#"" class="body">"#);
+                    if !found_id {
+                        item_text.clear();
+                    }
+                }
+                b"sense" => {
+                    if sense_count == 0 {
+                        item_text.push_str(r#"<br/><br/><div class="l"#);
+                    } else {
+                        item_text.push_str(r#"<br/><div class="l"#);
+                    }
+                    let mut label = String::from("");
+                    for a in e.attributes() {
+                        if a.as_ref().unwrap().key == QName(b"level") {
+                            item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                        } else if a.as_ref().unwrap().key == QName(b"n") {
+                            label.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                        }
+                    }
+                    item_text.push_str(r#"">"#);
+                    if !label.is_empty() {
+                        item_text
+                            .push_str(format!(r#"<span class="label">{}.</span>"#, label).as_str());
+                    }
+                    sense_count += 1;
+                }
+                b"author" => {
+                    item_text.push_str(r#"<span class="au">"#);
+                }
+                b"quote" => {
+                    item_text.push_str(r#"<span class="qu">"#);
+                }
+                b"foreign" => {
+                    item_text.push_str(r#"<span class="fo">"#);
+                }
+                b"i" => {
+                    item_text.push_str(r#"<span class="tr">"#);
+                }
+                b"title" => {
+                    item_text.push_str(r#"<span class="ti">"#);
+                }
+                b"bibl" => {
+                    item_text.push_str(r#"<a class="bi" biblink=""#);
+                    for a in e.attributes() {
+                        if a.as_ref().unwrap().key == QName(b"n") {
+                            item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                            break;
+                        }
+                    }
+                    item_text.push_str(r#"">"#);
+                }
+                _ => (),
             },
             Ok(Event::End(e)) => {
                 match e.name().as_ref() {
                     b"text" => {
                         in_text_tag = false;
-                    },
+                    }
                     b"head" => {
                         in_head_tag = false;
-                    },
-                    b"orth" => { 
+                    }
+                    b"orth" => {
                         in_orth_tag = false;
                         item_text.push_str("</span>");
-                    },
-                    b"div1" => {  
+                    }
+                    b"div1" => {
                         item_text.push_str("</div>");
                         //println!("item: {}", item_text);
-                        if in_text_tag {
+                        if in_text_tag && item_text.len() > 6 {
                             writeln!(file, "{}", item_text).unwrap();
                         }
                         head.clear();
                         orth.clear();
                         item_text.clear();
-                    },
+                    }
                     b"div2" => {
                         item_text.push_str("</div>");
                         //println!("item: {}", item_text);
-                        if in_text_tag {
+                        *item_count += 1;
+                        if in_text_tag && item_text.len() > 6 {
                             writeln!(file, "{}", item_text).unwrap();
                         }
                         head.clear();
                         orth.clear();
                         item_text.clear();
-                    },
-                    b"sense" => { 
+                    }
+                    b"sense" => {
                         item_text.push_str("</div>");
-                    },
-                    b"author" => { 
+                    }
+                    b"author" => {
                         item_text.push_str("</span>");
-                    },
-                    b"quote" => { 
+                    }
+                    b"quote" => {
                         item_text.push_str("</span>");
-                    },
-                    b"foreign" => { 
+                    }
+                    b"foreign" => {
                         item_text.push_str("</span>");
-                    },
-                    b"i" => { 
+                    }
+                    b"i" => {
                         item_text.push_str("</span>");
-                    },
-                    b"title" => { 
+                    }
+                    b"title" => {
                         item_text.push_str("</span>");
-                    },
-                    b"bibl" => { 
+                    }
+                    b"bibl" => {
                         item_text.push_str("</a>");
-                    },
+                    }
                     _ => (),
                 }
-            },
-            Ok(Event::Empty(_e)) => {},
+            }
+            Ok(Event::Empty(_e)) => {}
             Ok(Event::Text(e)) => {
                 //txt.push(e.unescape().unwrap().into_owned())
                 // if in_head_tag {
@@ -240,33 +235,32 @@ fn read_xml(file:&str, item_count:&mut u32) {
                     orth.push_str(&e.unescape().unwrap());
                 }
                 item_text.push_str(&e.unescape().unwrap());
-            },
+            }
         }
         buf.clear();
     }
 }
 
 fn main() -> tantivy::Result<()> {
-
     if Path::new(OUTPUT).is_file() {
         fs::remove_file(OUTPUT).expect("File delete failed");
     }
 
     let repo_path = "LSJLogeion/";
-	let repo_url = "https://github.com/helmadik/LSJLogeion.git";
+    let repo_url = "https://github.com/helmadik/LSJLogeion.git";
     let mut count = 0;
-	
-	if !Path::new(repo_path).exists() {
-		println!("Cloning {}...", repo_url);
 
-		//https://docs.rs/git2/0.16.1/git2/
-		let _repo = match Repository::clone(repo_url, repo_path) {
-		    Ok(repo) => repo,
-		    Err(e) => panic!("failed to clone: {}", e),
-		};
-	}
+    if !Path::new(repo_path).exists() {
+        println!("Cloning {}...", repo_url);
 
-	for entry in fs::read_dir(repo_path).expect("Unable to list") {
+        //https://docs.rs/git2/0.16.1/git2/
+        let _repo = match Repository::clone(repo_url, repo_path) {
+            Ok(repo) => repo,
+            Err(e) => panic!("failed to clone: {}", e),
+        };
+    }
+
+    for entry in fs::read_dir(repo_path).expect("Unable to list") {
         let entry = entry.expect("unable to get entry");
         //println!( "{}", entry.path().display() );
 
@@ -277,10 +271,6 @@ fn main() -> tantivy::Result<()> {
         }
     }
     println!("items: {}", count);
-
-
-
-
 
     // Let's create a temporary directory for the
     // sake of this example
