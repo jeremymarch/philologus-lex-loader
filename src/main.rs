@@ -63,15 +63,8 @@ impl Processor {
             .open(OUTPUT)
             .unwrap();
 
-    let title = self.index.schema().get_field("title").unwrap();
-    let body = self.index.schema().get_field("body").unwrap();
-    // let mut old_man_doc = Document::default();
-    // old_man_doc.add_text(title, "ὅτι μὲν ὑμεῖς");
-    // old_man_doc.add_text(
-    //     body,
-    //     "ὅτι μὲν ὑμεῖς, ὦ ἄνδρες Ἀθηναῖοι, πεπόνθατε ὑπὸ τῶν ἐμῶν κατηγόρων, οὐκ οἶδα· ἐγὼ δʼ οὖν καὶ αὐτὸς ὑπʼ αὐτῶν ὀλίγου ἐμαυτοῦ ἐπελαθόμην, οὕτω πιθανῶς ἔλεγον. καίτοι ἀληθές γε ὡς ἔπος εἰπεῖν οὐδὲν εἰρήκασιν. μάλιστα δὲ αὐτῶν ἓν ἐθαύμασα τῶν πολλῶν ὧν ἐψεύσαντο, τοῦτο ἐν ᾧ ἔλεγον ὡς χρῆν ὑμᾶς εὐλαβεῖσθαι μὴ ὑπʼ ἐμοῦ ἐξαπατηθῆτε",
-    // );
-    // self.index_writer.add_document(old_man_doc).unwrap();
+        let title = self.index.schema().get_field("title").unwrap();
+        let body = self.index.schema().get_field("body").unwrap();
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -289,12 +282,12 @@ fn main() -> tantivy::Result<()> {
     schema_builder.add_text_field("body", TEXT | STORED);
     let schema = schema_builder.build();
     let index = Index::create_in_dir(&index_path, schema.clone())?;
-    let mut index_writer: IndexWriter = index.writer(50_000_000)?;
-
-
-    let mut item_count = 0;
+    let index_writer: IndexWriter = index.writer(50_000_000)?;
 
     let mut p = Processor { lexica: vec![lsj], index: index, index_writer: index_writer };
+
+    
+    let mut item_count = 0;
 
     for lex in &p.lexica {
         if !Path::new(&lex.dir_name).exists() {
