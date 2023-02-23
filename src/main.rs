@@ -206,13 +206,10 @@ impl Processor {
                                 writeln!(file, "{} {}", item_count, item_text).unwrap();
                                 self.handle_word(*item_count, &head, &item_text);
 
-
                                 let mut doc = Document::default();
                                 doc.add_text(title, &head);
                                 doc.add_text(body, &item_text);
                                 self.index_writer.add_document(doc).unwrap();
-                            
-
                             }
                             head.clear();
                             orth.clear();
@@ -275,7 +272,6 @@ fn main() -> tantivy::Result<()> {
         end_rng: 86,
     };
 
-
     let index_path = TempDir::new()?; //"tantivy-data"; //
     let mut schema_builder = Schema::builder();
     schema_builder.add_text_field("title", TEXT | STORED);
@@ -284,9 +280,12 @@ fn main() -> tantivy::Result<()> {
     let index = Index::create_in_dir(&index_path, schema.clone())?;
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
-    let mut p = Processor { lexica: vec![lsj], index: index, index_writer: index_writer };
+    let mut p = Processor {
+        lexica: vec![lsj],
+        index: index,
+        index_writer: index_writer,
+    };
 
-    
     let mut item_count = 0;
 
     for lex in &p.lexica {
@@ -336,10 +335,8 @@ fn main() -> tantivy::Result<()> {
 
     // index_writer.commit()?;
 
-
-
-
-    let reader = p.index
+    let reader = p
+        .index
         .reader_builder()
         .reload_policy(ReloadPolicy::OnCommit)
         .try_into()?;
