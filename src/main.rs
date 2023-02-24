@@ -1,7 +1,7 @@
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
-use tantivy::{doc, Index, IndexWriter, ReloadPolicy};
+use tantivy::{Index, IndexWriter, ReloadPolicy};
 use tempfile::TempDir;
 
 use quick_xml::events::Event;
@@ -17,11 +17,15 @@ use std::path::Path;
 // use quick_xml::Writer;
 // use quick_xml::events::BytesEnd;
 
-use std::fs::OpenOptions;
-use std::io::prelude::*;
+//use std::fs::OpenOptions;
+//use std::io::prelude::*;
+
+use sqlx::AnyConnection;
+use sqlx::Connection;
 
 static OUTPUT: &str = "output.txt";
 
+#[derive(Clone)]
 struct Lexicon {
     dir_name: String,
     file_name: String,
@@ -34,14 +38,39 @@ struct Processor {
     lexica: Vec<Lexicon>,
     index: Index,
     index_writer: IndexWriter,
+    db: AnyConnection,
 }
 
 impl Processor {
-    fn handle_word(&self, count: u32, lemma: &str, def: &str) {
-        //println!("{} {} {}", count, lemma, def);
+    async fn db_insert_word(&mut self, item_count: i32, lemma: &str, def: &str) {
+        //println!("{} {}", item_count, lemma);
+        let query = r#"INSERT INTO ZGREEK (seq, word, sortword, def) VALUES ($1, $2, $3, $4);"#;
+        let _ = sqlx::query(query)
+            .bind(item_count)
+            .bind(lemma)
+            .bind(lemma)
+            .bind(def)
+            .execute(&mut self.db)
+            .await
+            .unwrap();
     }
 
-    fn read_xml(&self, file: &str, item_count: &mut u32) {
+    fn tantivy_insert_word(
+        &mut self,
+        _item_count: i32,
+        lemma: &str,
+        item_text_no_tags: &str,
+        title: &Field,
+        body: &Field,
+    ) {
+        //println!("{} {}", item_count, lemma);
+        let mut doc = Document::default();
+        doc.add_text(*title, lemma);
+        doc.add_text(*body, item_text_no_tags);
+        self.index_writer.add_document(doc).unwrap();
+    }
+
+    async fn read_xml(&mut self, file: &str, item_count: &mut i32) {
         //println!("file: {}", file);
         let mut reader = Reader::from_file(file).unwrap();
         reader.trim_text(false); //false to preserve whitespace
@@ -49,6 +78,7 @@ impl Processor {
         let mut buf = Vec::new();
 
         let mut item_text = String::from("");
+        let mut item_text_no_tags = String::from("");
         let mut head = String::from("");
         let mut orth = String::from("");
 
@@ -57,11 +87,11 @@ impl Processor {
         let mut in_head_tag = false;
         let mut in_text_tag = false;
 
-        let mut file = OpenOptions::new()
-            .append(true)
-            .create(true)
-            .open(OUTPUT)
-            .unwrap();
+        // let mut file = OpenOptions::new()
+        //     .append(true)
+        //     .create(true)
+        //     .open(OUTPUT)
+        //     .unwrap();
 
         let title = self.index.schema().get_field("title").unwrap();
         let body = self.index.schema().get_field("body").unwrap();
@@ -192,28 +222,33 @@ impl Processor {
                             //println!("item: {}", item_text);
                             if in_text_tag && item_text.len() > 6 {
                                 //writeln!(file, "{} {}", item_count, item_text).unwrap();
-                                self.handle_word(*item_count, &head, &item_text);
+                                //self.db_insert_word(*item_count, &head, &item_text).await;
                             }
                             head.clear();
                             orth.clear();
                             item_text.clear();
+                            item_text_no_tags.clear();
                         }
                         b"div2" => {
                             item_text.push_str("</div>");
                             //println!("item: {}", item_text);
                             if in_text_tag && item_text.len() > 6 {
                                 *item_count += 1;
-                                writeln!(file, "{} {}", item_count, item_text).unwrap();
-                                self.handle_word(*item_count, &head, &item_text);
+                                //writeln!(file, "{} {}", item_count, item_text).unwrap();
+                                self.db_insert_word(*item_count, &head, &item_text).await;
 
-                                let mut doc = Document::default();
-                                doc.add_text(title, &head);
-                                doc.add_text(body, &item_text);
-                                self.index_writer.add_document(doc).unwrap();
+                                self.tantivy_insert_word(
+                                    *item_count,
+                                    &head,
+                                    &item_text_no_tags,
+                                    &title,
+                                    &body,
+                                );
                             }
                             head.clear();
                             orth.clear();
                             item_text.clear();
+                            item_text_no_tags.clear();
                         }
                         b"sense" => {
                             item_text.push_str("</div>");
@@ -252,6 +287,7 @@ impl Processor {
                         orth.push_str(&e.unescape().unwrap());
                     }
                     item_text.push_str(&e.unescape().unwrap());
+                    item_text_no_tags.push_str(&e.unescape().unwrap());
                 }
             }
             buf.clear();
@@ -259,10 +295,19 @@ impl Processor {
     }
 }
 
-fn main() -> tantivy::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     if Path::new(OUTPUT).is_file() {
         fs::remove_file(OUTPUT).expect("File delete failed");
     }
+
+    let mut conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
+
+    let query = "CREATE TABLE IF NOT EXISTS ZGREEK(seq INTEGER PRIMARY KEY, word TEXT, sortword TEXT, def TEXT);";
+    let _res = sqlx::query(query).execute(&mut conn).await;
+
+    let query = "DELETE FROM ZGREEK;";
+    let _res = sqlx::query(query).execute(&mut conn).await;
 
     let lsj = Lexicon {
         dir_name: "LSJLogeion/".to_string(),
@@ -282,13 +327,14 @@ fn main() -> tantivy::Result<()> {
 
     let mut p = Processor {
         lexica: vec![lsj],
-        index: index,
-        index_writer: index_writer,
+        index,
+        index_writer,
+        db: conn,
     };
 
-    let mut item_count = 0;
+    let mut item_count: i32 = 0;
 
-    for lex in &p.lexica {
+    for lex in p.lexica.clone() {
         if !Path::new(&lex.dir_name).exists() {
             println!("Cloning {}...", &lex.repo_url);
 
@@ -300,7 +346,7 @@ fn main() -> tantivy::Result<()> {
 
         for i in lex.start_rng..=lex.end_rng {
             let path = format!("{}{}{:02}.xml", &lex.dir_name, &lex.file_name, i);
-            p.read_xml(&path, &mut item_count);
+            p.read_xml(&path, &mut item_count).await;
         }
         println!("items: {}", item_count);
     }
@@ -309,31 +355,6 @@ fn main() -> tantivy::Result<()> {
 
     let title = p.index.schema().get_field("title").unwrap();
     let body = p.index.schema().get_field("body").unwrap();
-    // let mut old_man_doc = Document::default();
-    // old_man_doc.add_text(title, "ὅτι μὲν ὑμεῖς");
-    // old_man_doc.add_text(
-    //     body,
-    //     "ὅτι μὲν ὑμεῖς, ὦ ἄνδρες Ἀθηναῖοι, πεπόνθατε ὑπὸ τῶν ἐμῶν κατηγόρων, οὐκ οἶδα· ἐγὼ δʼ οὖν καὶ αὐτὸς ὑπʼ αὐτῶν ὀλίγου ἐμαυτοῦ ἐπελαθόμην, οὕτω πιθανῶς ἔλεγον. καίτοι ἀληθές γε ὡς ἔπος εἰπεῖν οὐδὲν εἰρήκασιν. μάλιστα δὲ αὐτῶν ἓν ἐθαύμασα τῶν πολλῶν ὧν ἐψεύσαντο, τοῦτο ἐν ᾧ ἔλεγον ὡς χρῆν ὑμᾶς εὐλαβεῖσθαι μὴ ὑπʼ ἐμοῦ ἐξαπατηθῆτε",
-    // );
-    // index_writer.add_document(old_man_doc)?;
-
-    // // For convenience, tantivy also comes with a macro to reduce the boilerplate above.
-    // index_writer.add_document(doc!(
-    // title => "ὡς δεινοῦ ὄντος λέγειν",
-    // body => "ὡς δεινοῦ ὄντος λέγειν. τὸ γὰρ μὴ αἰσχυνθῆναι ὅτι αὐτίκα ὑπʼ ἐμοῦ ἐξελεγχθήσονται ἔργῳ, ἐπειδὰν μηδʼ ὁπωστιοῦν φαίνωμαι δεινὸς λέγειν, τοῦτό μοι ἔδοξεν αὐτῶν ἀναισχυντότατον εἶναι, εἰ μὴ ἄρα δεινὸν καλοῦσιν οὗτοι λέγειν τὸν τἀληθῆ λέγοντα· εἰ μὲν γὰρ τοῦτο λέγουσιν, ὁμολογοίην ἂν ἔγωγε οὐ κατὰ τούτους εἶναι ῥήτωρ. οὗτοι μὲν οὖν, ὥσπερ ἐγὼ λέγω, ἤ τι ἢ οὐδὲν ἀληθὲς εἰρήκασιν, ὑμεῖς δέ μου ἀκούσεσθε πᾶσαν τὴν ἀλήθειαν—οὐ μέντοι μὰ Δία, ὦ ἄνδρες Ἀθηναῖοι, κεκαλλιεπημένους γε λόγους, ὥσπερ οἱ τούτων,"
-    // ))?;
-
-    // // Multivalued field just need to be repeated.
-    // index_writer.add_document(doc!(
-    // title => "Frankenstein",
-    // title => "The Modern Prometheus",
-    // body => "You will rejoice to hear that no disaster has accompanied the commencement of an \
-    //          enterprise which you have regarded with such evil forebodings.  I arrived here \
-    //          yesterday, and my first task is to assure my dear sister of my welfare and \
-    //          increasing confidence in the success of my undertaking."
-    // ))?;
-
-    // index_writer.commit()?;
 
     let reader = p
         .index
