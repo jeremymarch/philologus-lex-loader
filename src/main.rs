@@ -42,7 +42,9 @@ struct Processor {
 }
 
 impl Processor {
-    async fn db_insert_word(&mut self, item_count: i32, lemma: &str, def: &str) {
+
+    async fn db_insert_word<'a, 'b>(
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Any>, item_count: i32, lemma: &str, def: &str) -> Result<(), sqlx::Error> {
         //println!("{} {}", item_count, lemma);
         let query = r#"INSERT INTO ZGREEK (seq, word, sortword, def) VALUES ($1, $2, $3, $4);"#;
         let _ = sqlx::query(query)
@@ -50,13 +52,12 @@ impl Processor {
             .bind(lemma)
             .bind(lemma)
             .bind(def)
-            .execute(&mut self.db)
-            .await
-            .unwrap();
+            .execute(&mut *tx)
+            .await?;
+        Ok(())
     }
 
-    fn tantivy_insert_word(
-        &mut self,
+    fn tantivy_insert_word(index_writer: &IndexWriter,
         _item_count: i32,
         lemma: &str,
         item_text_no_tags: &str,
@@ -67,10 +68,10 @@ impl Processor {
         let mut doc = Document::default();
         doc.add_text(*title, lemma);
         doc.add_text(*body, item_text_no_tags);
-        self.index_writer.add_document(doc).unwrap();
+        index_writer.add_document(doc).unwrap();
     }
 
-    async fn read_xml(&mut self, file: &str, item_count: &mut i32) {
+    async fn read_xml(&mut self, file: &str, item_count: &mut i32) -> Result<(), sqlx::Error> {
         //println!("file: {}", file);
         let mut reader = Reader::from_file(file).unwrap();
         reader.trim_text(false); //false to preserve whitespace
@@ -95,6 +96,8 @@ impl Processor {
 
         let title = self.index.schema().get_field("title").unwrap();
         let body = self.index.schema().get_field("body").unwrap();
+
+        let mut tx = self.db.begin().await?;
 
         loop {
             match reader.read_event_into(&mut buf) {
@@ -235,15 +238,19 @@ impl Processor {
                             if in_text_tag && item_text.len() > 6 {
                                 *item_count += 1;
                                 //writeln!(file, "{} {}", item_count, item_text).unwrap();
-                                self.db_insert_word(*item_count, &head, &item_text).await;
 
-                                self.tantivy_insert_word(
+                                //this fixes issue in borrow checker with multiple mutable refs to self
+                                let index_writer = &self.index_writer;
+                                Processor::tantivy_insert_word(
+                                    index_writer,
                                     *item_count,
                                     &head,
                                     &item_text_no_tags,
                                     &title,
                                     &body,
                                 );
+                                
+                                Processor::db_insert_word(&mut tx, *item_count, &head, &item_text).await;
                             }
                             head.clear();
                             orth.clear();
@@ -292,6 +299,8 @@ impl Processor {
             }
             buf.clear();
         }
+        tx.commit().await?;
+        Ok(())
     }
 }
 
