@@ -42,9 +42,12 @@ struct Processor {
 }
 
 impl Processor {
-
     async fn db_insert_word<'a, 'b>(
-        tx: &'a mut sqlx::Transaction<'b, sqlx::Any>, item_count: i32, lemma: &str, def: &str) -> Result<(), sqlx::Error> {
+        tx: &'a mut sqlx::Transaction<'b, sqlx::Any>,
+        item_count: i32,
+        lemma: &str,
+        def: &str,
+    ) -> Result<(), sqlx::Error> {
         //println!("{} {}", item_count, lemma);
         let query = r#"INSERT INTO ZGREEK (seq, word, sortword, def) VALUES ($1, $2, $3, $4);"#;
         let _ = sqlx::query(query)
@@ -57,7 +60,8 @@ impl Processor {
         Ok(())
     }
 
-    fn tantivy_insert_word(index_writer: &IndexWriter,
+    fn tantivy_insert_word(
+        index_writer: &IndexWriter,
         _item_count: i32,
         lemma: &str,
         item_text_no_tags: &str,
@@ -222,20 +226,8 @@ impl Processor {
                         }
                         b"div1" => {
                             item_text.push_str("</div>");
-                            //println!("item: {}", item_text);
-                            if in_text_tag && item_text.len() > 6 {
-                                //writeln!(file, "{} {}", item_count, item_text).unwrap();
-                                //self.db_insert_word(*item_count, &head, &item_text).await;
-                            }
-                            head.clear();
-                            orth.clear();
-                            item_text.clear();
-                            item_text_no_tags.clear();
-                        }
-                        b"div2" => {
-                            item_text.push_str("</div>");
-                            //println!("item: {}", item_text);
-                            if in_text_tag && item_text.len() > 6 {
+
+                            if in_text_tag && item_text.trim().len() > 6 {
                                 *item_count += 1;
                                 //writeln!(file, "{} {}", item_count, item_text).unwrap();
 
@@ -249,8 +241,37 @@ impl Processor {
                                     &title,
                                     &body,
                                 );
-                                
-                                Processor::db_insert_word(&mut tx, *item_count, &head, &item_text).await;
+
+                                let _ = Processor::db_insert_word(&mut tx, *item_count, &head, &item_text)
+                                    .await;
+
+                                //println!("item: {}", item_text);
+                            }
+                            head.clear();
+                            orth.clear();
+                            item_text.clear();
+                            item_text_no_tags.clear();
+                        }
+                        b"div2" => {
+                            item_text.push_str("</div>");
+                            //println!("item: {}", item_text);
+                            if in_text_tag && item_text.trim().len() > 6 {
+                                *item_count += 1;
+                                //writeln!(file, "{} {}", item_count, item_text).unwrap();
+
+                                //this fixes issue in borrow checker with multiple mutable refs to self
+                                let index_writer = &self.index_writer;
+                                Processor::tantivy_insert_word(
+                                    index_writer,
+                                    *item_count,
+                                    &head,
+                                    &item_text_no_tags,
+                                    &title,
+                                    &body,
+                                );
+
+                                let _ = Processor::db_insert_word(&mut tx, *item_count, &head, &item_text)
+                                    .await;
                             }
                             head.clear();
                             orth.clear();
@@ -325,6 +346,20 @@ async fn main() -> anyhow::Result<()> {
         start_rng: 2,
         end_rng: 86,
     };
+    let ls = Lexicon {
+        dir_name: "LewisShortLogeion/".to_string(),
+        file_name: "latindico".to_string(),
+        repo_url: "https://github.com/helmadik/LewisShortLogeion.git".to_string(),
+        start_rng: 1,
+        end_rng: 25,
+    };
+    let slater = Lexicon {
+        dir_name: "SlaterPindar/".to_string(),
+        file_name: "pindar_dico".to_string(),
+        repo_url: "https://github.com/helmadik/SlaterPindar.git".to_string(),
+        start_rng: 1,
+        end_rng: 24,
+    };
 
     let index_path = TempDir::new()?; //"tantivy-data"; //
     let mut schema_builder = Schema::builder();
@@ -335,7 +370,7 @@ async fn main() -> anyhow::Result<()> {
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
     let mut p = Processor {
-        lexica: vec![lsj],
+        lexica: vec![lsj, ls, slater],
         index,
         index_writer,
         db: conn,
@@ -355,7 +390,11 @@ async fn main() -> anyhow::Result<()> {
 
         for i in lex.start_rng..=lex.end_rng {
             let path = format!("{}{}{:02}.xml", &lex.dir_name, &lex.file_name, i);
-            p.read_xml(&path, &mut item_count).await;
+            //println!("path: {}", path);
+            if lex.file_name == "latindico" && i == 10 {
+                continue;
+            }
+            let _ = p.read_xml(&path, &mut item_count).await;
         }
         println!("items: {}", item_count);
     }
@@ -374,7 +413,7 @@ async fn main() -> anyhow::Result<()> {
     let searcher = reader.searcher();
 
     let query_parser = QueryParser::for_index(&p.index, vec![title, body]);
-    let query = query_parser.parse_query("ἐπόχους")?;
+    let query = query_parser.parse_query("carry")?;
 
     let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
 
