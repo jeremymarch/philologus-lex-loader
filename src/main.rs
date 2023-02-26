@@ -109,7 +109,7 @@ impl Processor<'_> {
 
         //println!("{} {}", item_count, lemma);
         let mut doc = Document::default();
-        doc.add_text(word_id_field, item_count);
+        doc.add_u64(word_id_field, item_count.try_into().unwrap());
         doc.add_text(lemma_field, lemma);
         doc.add_text(lexicon_field, lexicon_name);
         doc.add_text(def_field, item_text_no_tags);
@@ -426,11 +426,14 @@ async fn main() -> anyhow::Result<()> {
 
     let index_path = TempDir::new()?; //"tantivy-data"; //
     let mut schema_builder = Schema::builder();
-    schema_builder.add_text_field("word_id", TEXT | STORED);
+
+    let num_options = NumericOptions::default().set_stored().set_indexed();
+    schema_builder.add_u64_field("word_id", num_options);
     schema_builder.add_text_field("lemma", TEXT | STORED);
     schema_builder.add_text_field("lexicon", TEXT | STORED);
     schema_builder.add_text_field("definition", TEXT);
     let schema = schema_builder.build();
+
     let index = Index::create_in_dir(&index_path, schema.clone())?;
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
@@ -455,18 +458,22 @@ async fn main() -> anyhow::Result<()> {
         .try_into()?;
 
     let searcher = reader.searcher();
-
     let query_parser = QueryParser::for_index(
         &index,
         vec![word_id_field, lemma_field, lexicon_field, definition_field],
     );
-    let query = query_parser.parse_query("carry")?;
 
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
-
-    for (_score, doc_address) in top_docs {
-        let retrieved_doc = searcher.doc(doc_address)?;
-        println!("{}", schema.to_json(&retrieved_doc));
+    match query_parser.parse_query("definition:carry AND lexicon:slater") {
+        Ok(query) => {
+            let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
+            for (_score, doc_address) in top_docs {
+                let retrieved_doc = searcher.doc(doc_address)?;
+                println!("{}", schema.to_json(&retrieved_doc));
+            }
+        }
+        Err(q) => {
+            println!("Query parsing error: {:?}", q)
+        }
     }
 
     Ok(())
