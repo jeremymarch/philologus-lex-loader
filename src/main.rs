@@ -34,6 +34,34 @@ struct Lexicon {
     end_rng: u32,
 }
 
+struct LexEntryCollector {
+    item_text: String,
+    item_text_no_tags: String,
+    head: String,
+    orth: String,
+    sense_count: u32,
+}
+
+impl LexEntryCollector {
+    fn new() -> Self {
+        Self {
+            item_text: String::from(""),
+            item_text_no_tags: String::from(""),
+            head: String::from(""),
+            orth: String::from(""),
+            sense_count: 0,
+        }
+    }
+
+    fn clear(&mut self) {
+        self.item_text.clear();
+        self.item_text_no_tags.clear();
+        self.head.clear();
+        self.orth.clear();
+        self.sense_count = 0;
+    }
+}
+
 struct Processor {
     lexica: Vec<Lexicon>,
     index: Index,
@@ -82,12 +110,8 @@ impl Processor {
 
         let mut buf = Vec::new();
 
-        let mut item_text = String::from("");
-        let mut item_text_no_tags = String::from("");
-        let mut head = String::from("");
-        let mut orth = String::from("");
+        let mut entry = LexEntryCollector::new();
 
-        let mut sense_count = 0;
         let mut in_orth_tag = false;
         let mut in_head_tag = false;
         let mut in_text_tag = false;
@@ -122,93 +146,75 @@ impl Processor {
                     }
                     b"orth" => {
                         in_orth_tag = true;
-                        item_text.push_str(r#"<span class="orth">"#);
+                        entry.item_text.push_str(r#"<span class="orth">"#);
                     }
-                    b"div1" => {
-                        head.clear();
-                        orth.clear();
-                        item_text.clear();
-                        sense_count = 0;
-                        item_text.push_str(r#"<div id=""#);
+                    b"div1" | b"div2" => {
+                        entry.clear();
+
+                        entry.item_text.push_str(r#"<div id=""#);
                         let mut found_id = false;
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"id") {
                                 found_id = true;
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                                entry.item_text
+                                    .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                                 break;
                             }
                         }
-                        item_text.push_str(r#"" class="body">"#);
+                        entry.item_text.push_str(r#"" class="body">"#);
                         // checking that we found an id prevents treating container <div1> as a word div in lsj
                         if !found_id {
-                            item_text.clear();
-                        }
-                    }
-                    b"div2" => {
-                        head.clear();
-                        orth.clear();
-                        item_text.clear();
-                        sense_count = 0;
-                        item_text.push_str(r#"<div id=""#);
-                        let mut found_id = false;
-                        for a in e.attributes() {
-                            if a.as_ref().unwrap().key == QName(b"id") {
-                                found_id = true;
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
-                                break;
-                            }
-                        }
-                        item_text.push_str(r#"" class="body">"#);
-                        if !found_id {
-                            item_text.clear();
+                            entry.clear();
                         }
                     }
                     b"sense" => {
-                        if sense_count == 0 {
-                            item_text.push_str(r#"<br/><br/><div class="l"#);
+                        if entry.sense_count == 0 {
+                            entry.item_text.push_str(r#"<br/><br/><div class="l"#);
                         } else {
-                            item_text.push_str(r#"<br/><div class="l"#);
+                            entry.item_text.push_str(r#"<br/><div class="l"#);
                         }
                         let mut label = String::from("");
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"level") {
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                                entry.item_text
+                                    .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                             } else if a.as_ref().unwrap().key == QName(b"n") {
                                 label.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                             }
                         }
-                        item_text.push_str(r#"">"#);
+                        entry.item_text.push_str(r#"">"#);
                         if !label.is_empty() {
-                            item_text.push_str(
+                            entry.item_text.push_str(
                                 format!(r#"<span class="label">{}.</span>"#, label).as_str(),
                             );
                         }
-                        sense_count += 1;
+                        entry.sense_count += 1;
                     }
                     b"author" => {
-                        item_text.push_str(r#"<span class="au">"#);
+                        entry.item_text.push_str(r#"<span class="au">"#);
                     }
                     b"quote" => {
-                        item_text.push_str(r#"<span class="qu">"#);
+                        entry.item_text.push_str(r#"<span class="qu">"#);
                     }
                     b"foreign" => {
-                        item_text.push_str(r#"<span class="fo">"#);
+                        entry.item_text.push_str(r#"<span class="fo">"#);
                     }
                     b"i" => {
-                        item_text.push_str(r#"<span class="tr">"#);
+                        entry.item_text.push_str(r#"<span class="tr">"#);
                     }
                     b"title" => {
-                        item_text.push_str(r#"<span class="ti">"#);
+                        entry.item_text.push_str(r#"<span class="ti">"#);
                     }
                     b"bibl" => {
-                        item_text.push_str(r#"<a class="bi" biblink=""#);
+                        entry.item_text.push_str(r#"<a class="bi" biblink=""#);
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"n") {
-                                item_text.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
+                                entry.item_text
+                                    .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                                 break;
                             }
                         }
-                        item_text.push_str(r#"">"#);
+                        entry.item_text.push_str(r#"">"#);
                     }
                     _ => (),
                 },
@@ -222,12 +228,12 @@ impl Processor {
                         }
                         b"orth" => {
                             in_orth_tag = false;
-                            item_text.push_str("</span>");
+                            entry.item_text.push_str("</span>");
                         }
                         b"div1" => {
-                            item_text.push_str("</div>");
+                            entry.item_text.push_str("</div>");
 
-                            if in_text_tag && item_text.trim().len() > 6 {
+                            if in_text_tag && entry.item_text.trim().len() > 6 {
                                 *item_count += 1;
                                 //writeln!(file, "{} {}", item_count, item_text).unwrap();
 
@@ -236,26 +242,28 @@ impl Processor {
                                 Processor::tantivy_insert_word(
                                     index_writer,
                                     *item_count,
-                                    &head,
-                                    &item_text_no_tags,
+                                    &entry.head,
+                                    entry.item_text_no_tags.trim(),
                                     &title,
                                     &body,
                                 );
 
-                                let _ = Processor::db_insert_word(&mut tx, *item_count, &head, &item_text)
-                                    .await;
+                                let _ = Processor::db_insert_word(
+                                    &mut tx,
+                                    *item_count,
+                                    &entry.head,
+                                    &entry.item_text,
+                                )
+                                .await;
 
                                 //println!("item: {}", item_text);
                             }
-                            head.clear();
-                            orth.clear();
-                            item_text.clear();
-                            item_text_no_tags.clear();
+                            entry.clear();
                         }
                         b"div2" => {
-                            item_text.push_str("</div>");
+                            entry.item_text.push_str("</div>");
                             //println!("item: {}", item_text);
-                            if in_text_tag && item_text.trim().len() > 6 {
+                            if in_text_tag && entry.item_text.trim().len() > 6 {
                                 *item_count += 1;
                                 //writeln!(file, "{} {}", item_count, item_text).unwrap();
 
@@ -264,40 +272,42 @@ impl Processor {
                                 Processor::tantivy_insert_word(
                                     index_writer,
                                     *item_count,
-                                    &head,
-                                    &item_text_no_tags,
+                                    &entry.head,
+                                    entry.item_text_no_tags.trim(),
                                     &title,
                                     &body,
                                 );
 
-                                let _ = Processor::db_insert_word(&mut tx, *item_count, &head, &item_text)
-                                    .await;
+                                let _ = Processor::db_insert_word(
+                                    &mut tx,
+                                    *item_count,
+                                    &entry.head,
+                                    &entry.item_text,
+                                )
+                                .await;
                             }
-                            head.clear();
-                            orth.clear();
-                            item_text.clear();
-                            item_text_no_tags.clear();
+                            entry.clear();
                         }
                         b"sense" => {
-                            item_text.push_str("</div>");
+                            entry.item_text.push_str("</div>");
                         }
                         b"author" => {
-                            item_text.push_str("</span>");
+                            entry.item_text.push_str("</span>");
                         }
                         b"quote" => {
-                            item_text.push_str("</span>");
+                            entry.item_text.push_str("</span>");
                         }
                         b"foreign" => {
-                            item_text.push_str("</span>");
+                            entry.item_text.push_str("</span>");
                         }
                         b"i" => {
-                            item_text.push_str("</span>");
+                            entry.item_text.push_str("</span>");
                         }
                         b"title" => {
-                            item_text.push_str("</span>");
+                            entry.item_text.push_str("</span>");
                         }
                         b"bibl" => {
-                            item_text.push_str("</a>");
+                            entry.item_text.push_str("</a>");
                         }
                         _ => (),
                     }
@@ -309,13 +319,13 @@ impl Processor {
 
                     // }
                     if in_head_tag {
-                        head.push_str(&e.unescape().unwrap());
+                        entry.head.push_str(&e.unescape().unwrap());
                     }
                     if in_orth_tag {
-                        orth.push_str(&e.unescape().unwrap());
+                        entry.orth.push_str(&e.unescape().unwrap());
                     }
-                    item_text.push_str(&e.unescape().unwrap());
-                    item_text_no_tags.push_str(&e.unescape().unwrap());
+                    entry.item_text.push_str(&e.unescape().unwrap());
+                    entry.item_text_no_tags.push_str(&e.unescape().unwrap());
                 }
             }
             buf.clear();
