@@ -26,12 +26,13 @@ use sqlx::Connection;
 static OUTPUT: &str = "output.txt";
 
 #[derive(Clone)]
-struct Lexicon {
-    dir_name: String,
-    file_name: String,
-    repo_url: String,
+struct Lexicon<'a> {
+    dir_name: &'a str,
+    file_name: &'a str,
+    repo_url: &'a str,
     start_rng: u32,
     end_rng: u32,
+    name: &'a str,
 }
 
 struct LexEntryCollector {
@@ -62,24 +63,26 @@ impl LexEntryCollector {
     }
 }
 
-struct Processor {
-    lexica: Vec<Lexicon>,
-    index: Index,
+struct Processor<'a> {
+    lexica: Vec<Lexicon<'a>>,
     index_writer: IndexWriter,
     db: AnyConnection,
 }
 
-impl Processor {
+impl Processor<'_> {
     async fn db_insert_word<'a, 'b>(
         tx: &'a mut sqlx::Transaction<'b, sqlx::Any>,
         item_count: i32,
+        lexicon_name: &str,
         lemma: &str,
         def: &str,
     ) -> Result<(), sqlx::Error> {
         //println!("{} {}", item_count, lemma);
-        let query = r#"INSERT INTO ZGREEK (seq, word, sortword, def) VALUES ($1, $2, $3, $4);"#;
+        let query =
+            r#"INSERT INTO words (seq, lexicon, word, sortword, def) VALUES ($1, $2, $3, $4, $5);"#;
         let _ = sqlx::query(query)
             .bind(item_count)
+            .bind(lexicon_name)
             .bind(lemma)
             .bind(lemma)
             .bind(def)
@@ -90,20 +93,35 @@ impl Processor {
 
     fn tantivy_insert_word(
         index_writer: &IndexWriter,
-        _item_count: i32,
+        item_count: i32,
         lemma: &str,
+        lexicon_name: &str,
         item_text_no_tags: &str,
-        title: &Field,
-        body: &Field,
     ) {
+        let word_id_field = index_writer.index().schema().get_field("word_id").unwrap();
+        let lemma_field = index_writer.index().schema().get_field("lemma").unwrap();
+        let lexicon_field = index_writer.index().schema().get_field("lexicon").unwrap();
+        let def_field = index_writer
+            .index()
+            .schema()
+            .get_field("definition")
+            .unwrap();
+
         //println!("{} {}", item_count, lemma);
         let mut doc = Document::default();
-        doc.add_text(*title, lemma);
-        doc.add_text(*body, item_text_no_tags);
+        doc.add_text(word_id_field, item_count);
+        doc.add_text(lemma_field, lemma);
+        doc.add_text(lexicon_field, lexicon_name);
+        doc.add_text(def_field, item_text_no_tags);
         index_writer.add_document(doc).unwrap();
     }
 
-    async fn read_xml(&mut self, file: &str, item_count: &mut i32) -> Result<(), sqlx::Error> {
+    async fn read_xml(
+        &mut self,
+        file: &str,
+        lexicon_name: &str,
+        item_count: &mut i32,
+    ) -> Result<(), sqlx::Error> {
         //println!("file: {}", file);
         let mut reader = Reader::from_file(file).unwrap();
         reader.trim_text(false); //false to preserve whitespace
@@ -122,14 +140,15 @@ impl Processor {
         //     .open(OUTPUT)
         //     .unwrap();
 
-        let title = self.index.schema().get_field("title").unwrap();
-        let body = self.index.schema().get_field("body").unwrap();
-
         let mut tx = self.db.begin().await?;
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Err(e) => panic!("Error at position {}: {:?}", reader.buffer_position(), e),
+                Err(e) => panic!(
+                    "XML parsing error at position {}: {:?}",
+                    reader.buffer_position(),
+                    e
+                ),
                 Ok(Event::Eof) => break,
                 Ok(Event::Comment(_e)) => {}
                 Ok(Event::CData(_e)) => {}
@@ -156,7 +175,8 @@ impl Processor {
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"id") {
                                 found_id = true;
-                                entry.item_text
+                                entry
+                                    .item_text
                                     .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                                 break;
                             }
@@ -176,7 +196,8 @@ impl Processor {
                         let mut label = String::from("");
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"level") {
-                                entry.item_text
+                                entry
+                                    .item_text
                                     .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                             } else if a.as_ref().unwrap().key == QName(b"n") {
                                 label.push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
@@ -209,7 +230,8 @@ impl Processor {
                         entry.item_text.push_str(r#"<a class="bi" biblink=""#);
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"n") {
-                                entry.item_text
+                                entry
+                                    .item_text
                                     .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
                                 break;
                             }
@@ -243,14 +265,14 @@ impl Processor {
                                     index_writer,
                                     *item_count,
                                     &entry.head,
+                                    lexicon_name,
                                     entry.item_text_no_tags.trim(),
-                                    &title,
-                                    &body,
                                 );
 
                                 let _ = Processor::db_insert_word(
                                     &mut tx,
                                     *item_count,
+                                    lexicon_name,
                                     &entry.head,
                                     &entry.item_text,
                                 )
@@ -273,18 +295,19 @@ impl Processor {
                                     index_writer,
                                     *item_count,
                                     &entry.head,
+                                    lexicon_name,
                                     entry.item_text_no_tags.trim(),
-                                    &title,
-                                    &body,
                                 );
 
-                                let _ = Processor::db_insert_word(
+                                Processor::db_insert_word(
                                     &mut tx,
                                     *item_count,
+                                    lexicon_name,
                                     &entry.head,
                                     &entry.item_text,
                                 )
-                                .await;
+                                .await
+                                .unwrap();
                             }
                             entry.clear();
                         }
@@ -333,6 +356,41 @@ impl Processor {
         tx.commit().await?;
         Ok(())
     }
+
+    async fn start(&mut self) -> Result<(), sqlx::Error> {
+        let query = "CREATE TABLE IF NOT EXISTS words (seq INTEGER PRIMARY KEY, lexicon TEXT, word TEXT, sortword TEXT, def TEXT); \
+        CREATE INDEX IF NOT EXISTS lexicon_idx ON words (lexicon);";
+        let _res = sqlx::query(query).execute(&mut self.db).await;
+
+        let query = "DELETE FROM words;";
+        let _res = sqlx::query(query).execute(&mut self.db).await;
+
+        let mut item_count: i32 = 0;
+
+        for lex in self.lexica.clone() {
+            if !Path::new(&lex.dir_name).exists() {
+                println!("Cloning {}...", &lex.repo_url);
+
+                let _repo = match Repository::clone(lex.repo_url, lex.dir_name) {
+                    Ok(repo) => repo,
+                    Err(e) => panic!("failed to clone: {}", e),
+                };
+            }
+
+            for i in lex.start_rng..=lex.end_rng {
+                let path = format!("{}{}{:02}.xml", &lex.dir_name, &lex.file_name, i);
+                //println!("path: {}", path);
+                if lex.file_name == "latindico" && i == 10 {
+                    continue;
+                }
+                let _ = self.read_xml(&path, lex.name, &mut item_count).await;
+            }
+            println!("items: {}", item_count);
+        }
+
+        self.index_writer.commit().unwrap();
+        Ok(())
+    }
 }
 
 #[tokio::main]
@@ -341,91 +399,70 @@ async fn main() -> anyhow::Result<()> {
         fs::remove_file(OUTPUT).expect("File delete failed");
     }
 
-    let mut conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
-
-    let query = "CREATE TABLE IF NOT EXISTS ZGREEK(seq INTEGER PRIMARY KEY, word TEXT, sortword TEXT, def TEXT);";
-    let _res = sqlx::query(query).execute(&mut conn).await;
-
-    let query = "DELETE FROM ZGREEK;";
-    let _res = sqlx::query(query).execute(&mut conn).await;
-
     let lsj = Lexicon {
-        dir_name: "LSJLogeion/".to_string(),
-        file_name: "greatscott".to_string(),
-        repo_url: "https://github.com/helmadik/LSJLogeion.git".to_string(),
+        dir_name: "LSJLogeion/",
+        file_name: "greatscott",
+        repo_url: "https://github.com/helmadik/LSJLogeion.git",
         start_rng: 2,
         end_rng: 86,
+        name: "lsj",
     };
     let ls = Lexicon {
-        dir_name: "LewisShortLogeion/".to_string(),
-        file_name: "latindico".to_string(),
-        repo_url: "https://github.com/helmadik/LewisShortLogeion.git".to_string(),
+        dir_name: "LewisShortLogeion/",
+        file_name: "latindico",
+        repo_url: "https://github.com/helmadik/LewisShortLogeion.git",
         start_rng: 1,
         end_rng: 25,
+        name: "lewisshort",
     };
     let slater = Lexicon {
-        dir_name: "SlaterPindar/".to_string(),
-        file_name: "pindar_dico".to_string(),
-        repo_url: "https://github.com/helmadik/SlaterPindar.git".to_string(),
+        dir_name: "SlaterPindar/",
+        file_name: "pindar_dico",
+        repo_url: "https://github.com/helmadik/SlaterPindar.git",
         start_rng: 1,
         end_rng: 24,
+        name: "slater",
     };
 
     let index_path = TempDir::new()?; //"tantivy-data"; //
     let mut schema_builder = Schema::builder();
-    schema_builder.add_text_field("title", TEXT | STORED);
-    schema_builder.add_text_field("body", TEXT | STORED);
+    schema_builder.add_text_field("word_id", TEXT | STORED);
+    schema_builder.add_text_field("lemma", TEXT | STORED);
+    schema_builder.add_text_field("lexicon", TEXT | STORED);
+    schema_builder.add_text_field("definition", TEXT);
     let schema = schema_builder.build();
     let index = Index::create_in_dir(&index_path, schema.clone())?;
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
-    let mut p = Processor {
+    let conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
+
+    let mut processor = Processor {
         lexica: vec![lsj, ls, slater],
-        index,
         index_writer,
         db: conn,
     };
 
-    let mut item_count: i32 = 0;
+    processor.start().await.unwrap();
 
-    for lex in p.lexica.clone() {
-        if !Path::new(&lex.dir_name).exists() {
-            println!("Cloning {}...", &lex.repo_url);
+    let word_id_field = index.schema().get_field("word_id").unwrap();
+    let lemma_field = index.schema().get_field("lemma").unwrap();
+    let lexicon_field = index.schema().get_field("lexicon").unwrap();
+    let definition_field = index.schema().get_field("definition").unwrap();
 
-            let _repo = match Repository::clone(&lex.repo_url, &lex.dir_name) {
-                Ok(repo) => repo,
-                Err(e) => panic!("failed to clone: {}", e),
-            };
-        }
-
-        for i in lex.start_rng..=lex.end_rng {
-            let path = format!("{}{}{:02}.xml", &lex.dir_name, &lex.file_name, i);
-            //println!("path: {}", path);
-            if lex.file_name == "latindico" && i == 10 {
-                continue;
-            }
-            let _ = p.read_xml(&path, &mut item_count).await;
-        }
-        println!("items: {}", item_count);
-    }
-
-    p.index_writer.commit().unwrap();
-
-    let title = p.index.schema().get_field("title").unwrap();
-    let body = p.index.schema().get_field("body").unwrap();
-
-    let reader = p
-        .index
+    let reader = index
         .reader_builder()
         .reload_policy(ReloadPolicy::OnCommit)
         .try_into()?;
 
     let searcher = reader.searcher();
 
-    let query_parser = QueryParser::for_index(&p.index, vec![title, body]);
+    let query_parser = QueryParser::for_index(
+        &index,
+        vec![word_id_field, lemma_field, lexicon_field, definition_field],
+    );
     let query = query_parser.parse_query("carry")?;
 
-    let top_docs = searcher.search(&query, &TopDocs::with_limit(10))?;
+    let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
 
     for (_score, doc_address) in top_docs {
         let retrieved_doc = searcher.doc(doc_address)?;
