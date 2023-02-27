@@ -23,6 +23,8 @@ use std::path::Path;
 use sqlx::AnyConnection;
 use sqlx::Connection;
 
+use polytonic_greek::hgk_strip_diacritics;
+
 static OUTPUT: &str = "output.txt";
 
 #[derive(Clone)]
@@ -63,6 +65,21 @@ impl LexEntryCollector {
     }
 }
 
+fn sanitize_sort_key(str: &str) -> String {
+    match str {
+        "σάν" => return "πωω".to_string(),
+        "Ϟ ϟ" => return "πωωω".to_string(),
+        _ => (),
+    }
+    let mut s = str.to_lowercase();
+    s = hgk_strip_diacritics(&s, 0xFFFFFFFF);
+    s = s.replace('\u{1fbd}', "");
+    s = s.replace('ʼ', "");
+    s = s.replace('ϝ', "εωωω");
+    s = s.replace("'st", "st2");
+    s
+}
+
 struct Processor<'a> {
     lexica: Vec<Lexicon<'a>>,
     index_writer: IndexWriter,
@@ -84,7 +101,7 @@ impl Processor<'_> {
             .bind(item_count)
             .bind(lexicon_name)
             .bind(lemma)
-            .bind(lemma)
+            .bind(sanitize_sort_key(lemma).as_str())
             .bind(def)
             .execute(&mut *tx)
             .await?;
@@ -381,6 +398,7 @@ impl Processor<'_> {
                 let path = format!("{}{}{:02}.xml", &lex.dir_name, &lex.file_name, i);
                 //println!("path: {}", path);
                 if lex.file_name == "latindico" && i == 10 {
+                    //there is no file for words starting with "j"
                     continue;
                 }
                 let _ = self.read_xml(&path, lex.name, &mut item_count).await;
@@ -424,17 +442,18 @@ async fn main() -> anyhow::Result<()> {
         name: "slater",
     };
 
-    let index_path = TempDir::new()?; //"tantivy-data"; //
+    let index_path = TempDir::new()?; // "tantivy-data";
     let mut schema_builder = Schema::builder();
 
     let num_options = NumericOptions::default().set_stored().set_indexed();
     schema_builder.add_u64_field("word_id", num_options);
-    schema_builder.add_text_field("lemma", TEXT | STORED);
+    schema_builder.add_text_field("lemma", STORED); // lemma is also in definition, so no need to index it separately
     schema_builder.add_text_field("lexicon", TEXT | STORED);
     schema_builder.add_text_field("definition", TEXT);
     let schema = schema_builder.build();
 
     let index = Index::create_in_dir(&index_path, schema.clone())?;
+    //let index = Index::create_in_ram(schema.clone());
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
     let conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
@@ -447,8 +466,8 @@ async fn main() -> anyhow::Result<()> {
 
     processor.start().await.unwrap();
 
-    let word_id_field = index.schema().get_field("word_id").unwrap();
-    let lemma_field = index.schema().get_field("lemma").unwrap();
+    //let word_id_field = index.schema().get_field("word_id").unwrap();
+    //let lemma_field = index.schema().get_field("lemma").unwrap();
     let lexicon_field = index.schema().get_field("lexicon").unwrap();
     let definition_field = index.schema().get_field("definition").unwrap();
 
@@ -460,10 +479,11 @@ async fn main() -> anyhow::Result<()> {
     let searcher = reader.searcher();
     let query_parser = QueryParser::for_index(
         &index,
-        vec![word_id_field, lemma_field, lexicon_field, definition_field],
+        //this vector contains default fields used if field is not specified in query
+        vec![lexicon_field, definition_field],
     );
 
-    match query_parser.parse_query("definition:carry AND lexicon:slater") {
+    match query_parser.parse_query("carry AND (lexicon:slater OR lexicon:lewisshort)") {
         Ok(query) => {
             let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
             for (_score, doc_address) in top_docs {
@@ -472,7 +492,7 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Err(q) => {
-            println!("Query parsing error: {:?}", q)
+            println!("Query parsing error: {:?}", q);
         }
     }
 

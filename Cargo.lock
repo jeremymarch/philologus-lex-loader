@@ -1281,6 +1281,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6ac9a59f73473f1b8d852421e59e64809f025994837ef743615c6d0c5b305160"
 
 [[package]]
+name = "polytonic-greek"
+version = "0.4.6"
+source = "git+https://github.com/jeremymarch/polytonic-greek#7ca9195ca0d27ee70be4a12fb4923868b8a9989f"
+dependencies = [
+ "unicode-normalization",
+]
+
+[[package]]
 name = "ppv-lite86"
 version = "0.2.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1898,6 +1906,7 @@ dependencies = [
  "anyhow",
  "futures",
  "git2",
+ "polytonic-greek",
  "quick-xml",
  "serde",
  "serde_json",

@@ -16,3 +16,4 @@ tokio = { version = "1.21.2", features = ["full"] }
 anyhow = "1.0.31"
 serde = { version = "1.0.144", features = ["derive"] }
 serde_json = "1.0.85"
+polytonic-greek = { git = "https://github.com/jeremymarch/polytonic-greek", version = "0.4.5" }
