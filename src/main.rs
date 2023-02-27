@@ -2,7 +2,7 @@ use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{Index, IndexWriter, ReloadPolicy};
-use tempfile::TempDir;
+// use tempfile::TempDir;
 
 use quick_xml::events::Event;
 use quick_xml::name::QName;
@@ -16,9 +16,6 @@ use std::path::Path;
 // use std::io::Cursor;
 // use quick_xml::Writer;
 // use quick_xml::events::BytesEnd;
-
-//use std::fs::OpenOptions;
-//use std::io::prelude::*;
 
 use sqlx::AnyConnection;
 use sqlx::Connection;
@@ -67,16 +64,17 @@ impl LexEntryCollector {
 
 fn sanitize_sort_key(str: &str) -> String {
     match str {
-        "σάν" => return "πωω".to_string(),
-        "Ϟ ϟ" => return "πωωω".to_string(),
+        "σάν" => return "πωω".to_string(),              // after pi
+        "\u{03DE} \u{03DF}" => return "πωωω".to_string(), // koppa and lower case koppa are after san
         _ => (),
     }
     let mut s = str.to_lowercase();
-    s = hgk_strip_diacritics(&s, 0xFFFFFFFF);
-    s = s.replace('\u{1fbd}', "");
-    s = s.replace('ʼ', "");
-    s = s.replace('ϝ', "εωωω");
+    s = hgk_strip_diacritics(&s, 0xFFFFFFFF); // strip all diacritics
+    s = s.replace('\u{1fbd}', ""); // GREEK KORONIS
+    s = s.replace('\u{02BC}', ""); // apostrophe
+    s = s.replace('ϝ', "εωωω"); // digamma
     s = s.replace("'st", "st2");
+    s = s.replace('\'', ""); // remove any other single quotes
     s
 }
 
@@ -442,7 +440,12 @@ async fn main() -> anyhow::Result<()> {
         name: "slater",
     };
 
-    let index_path = TempDir::new()?; // "tantivy-data";
+    let index_path = "tantivy-data"; // TempDir::new()?;
+    if Path::new(index_path).is_dir() {
+        fs::remove_dir_all(index_path).unwrap();
+    }
+    fs::create_dir(index_path).unwrap();
+
     let mut schema_builder = Schema::builder();
 
     let num_options = NumericOptions::default().set_stored().set_indexed();
@@ -452,8 +455,8 @@ async fn main() -> anyhow::Result<()> {
     schema_builder.add_text_field("definition", TEXT);
     let schema = schema_builder.build();
 
-    let index = Index::create_in_dir(&index_path, schema.clone())?;
-    //let index = Index::create_in_ram(schema.clone());
+    let index = Index::create_in_dir(index_path, schema.clone())?;
+    // let index = Index::create_in_ram(schema.clone());
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
     let conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
