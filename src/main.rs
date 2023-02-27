@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
@@ -75,6 +77,7 @@ fn sanitize_sort_key(str: &str) -> String {
     s = s.replace('ϝ', "εωωω"); // digamma
     s = s.replace("'st", "st2");
     s = s.replace('\'', ""); // remove any other single quotes
+    s = s.replace('ς', "σ"); // sort all words with medial sigma
     s
 }
 
@@ -82,6 +85,7 @@ struct Processor<'a> {
     lexica: Vec<Lexicon<'a>>,
     index_writer: IndexWriter,
     db: AnyConnection,
+    unique_hashmap: HashMap<String, u32>, // to add numbers to end of non-unique lemmata
 }
 
 impl Processor<'_> {
@@ -148,6 +152,7 @@ impl Processor<'_> {
         let mut in_orth_tag = false;
         let mut in_head_tag = false;
         let mut in_text_tag = false;
+        let mut in_entry = false;
 
         // let mut file = OpenOptions::new()
         //     .append(true)
@@ -176,6 +181,8 @@ impl Processor<'_> {
                         in_text_tag = true;
                     }
                     b"head" => {
+                        //do not include <head> tags which are not in entries:
+                        // e.g. the letter head tags of Lewis & Short (latindico01.xml)
                         in_head_tag = true;
                     }
                     b"orth" => {
@@ -190,6 +197,7 @@ impl Processor<'_> {
                         for a in e.attributes() {
                             if a.as_ref().unwrap().key == QName(b"id") {
                                 found_id = true;
+                                in_entry = true;
                                 entry
                                     .item_text
                                     .push_str(std::str::from_utf8(&a.unwrap().value).unwrap());
@@ -295,6 +303,7 @@ impl Processor<'_> {
 
                                 //println!("item: {}", item_text);
                             }
+                            in_entry = false;
                             entry.clear();
                         }
                         b"div2" => {
@@ -324,6 +333,7 @@ impl Processor<'_> {
                                 .await
                                 .unwrap();
                             }
+                            in_entry = false;
                             entry.clear();
                         }
                         b"sense" => {
@@ -356,10 +366,28 @@ impl Processor<'_> {
                     // if in_head_tag {
 
                     // }
-                    if in_head_tag {
-                        entry.head.push_str(&e.unescape().unwrap());
+                    if in_head_tag && in_entry {
+                        let lemma = e.unescape().unwrap().to_string();
+                        // add numbers to end of non-unique lemmata
+                        let count = match self.unique_hashmap.get(&lemma) {
+                            Some(count) => count + 1,
+                            None => 1,
+                        };
+                        entry.head.push_str(
+                            format!(
+                                "{}{}",
+                                lemma,
+                                if count > 1 {
+                                    count.to_string()
+                                } else {
+                                    "".to_string()
+                                }
+                            )
+                            .as_str(),
+                        );
+                        self.unique_hashmap.insert(lemma, count);
                     }
-                    if in_orth_tag {
+                    if in_orth_tag && in_entry {
                         entry.orth.push_str(&e.unescape().unwrap());
                     }
                     entry.item_text.push_str(&e.unescape().unwrap());
@@ -374,7 +402,10 @@ impl Processor<'_> {
 
     async fn start(&mut self) -> Result<(), sqlx::Error> {
         let query = "CREATE TABLE IF NOT EXISTS words (seq INTEGER PRIMARY KEY, lexicon TEXT, word TEXT, sortword TEXT, def TEXT); \
-        CREATE INDEX IF NOT EXISTS lexicon_idx ON words (lexicon);";
+        CREATE INDEX IF NOT EXISTS lexicon_idx ON words (lexicon); \
+        CREATE INDEX IF NOT EXISTS sortword_idx ON words (sortword); \
+        CREATE INDEX IF NOT EXISTS word_idx ON words (word);";
+
         let _res = sqlx::query(query).execute(&mut self.db).await;
 
         let query = "DELETE FROM words;";
@@ -401,10 +432,14 @@ impl Processor<'_> {
                 }
                 let _ = self.read_xml(&path, lex.name, &mut item_count).await;
             }
+            self.unique_hashmap.clear(); // clear for next lexicon
             println!("items: {}", item_count);
         }
 
         self.index_writer.commit().unwrap();
+        
+        let query = "VACUUM;";
+        let _res = sqlx::query(query).execute(&mut self.db).await;
         Ok(())
     }
 }
@@ -461,10 +496,13 @@ async fn main() -> anyhow::Result<()> {
 
     let conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
 
+    let unique_hashmap = HashMap::new();
+
     let mut processor = Processor {
         lexica: vec![lsj, ls, slater],
         index_writer,
         db: conn,
+        unique_hashmap,
     };
 
     processor.start().await.unwrap();
@@ -487,15 +525,19 @@ async fn main() -> anyhow::Result<()> {
     );
 
     match query_parser.parse_query("carry AND (lexicon:slater OR lexicon:lewisshort)") {
-        Ok(query) => {
-            let top_docs = searcher.search(&query, &TopDocs::with_limit(100))?;
-            for (_score, doc_address) in top_docs {
-                let retrieved_doc = searcher.doc(doc_address)?;
-                println!("{}", schema.to_json(&retrieved_doc));
+        Ok(query) => match searcher.search(&query, &TopDocs::with_limit(100)) {
+            Ok(top_docs) => {
+                for (_score, doc_address) in top_docs {
+                    match searcher.doc(doc_address) {
+                        Ok(retrieved_doc) => println!("{}", schema.to_json(&retrieved_doc)),
+                        Err(e) => println!("Error retrieving document: {:?}", e),
+                    }
+                }
             }
-        }
-        Err(q) => {
-            println!("Query parsing error: {:?}", q);
+            Err(e) => println!("Error searching tantivy index: {:?}", e),
+        },
+        Err(e) => {
+            println!("Query parsing error: {:?}", e);
         }
     }
 
