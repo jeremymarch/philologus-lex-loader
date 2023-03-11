@@ -131,7 +131,10 @@ impl Processor<'_> {
         doc.add_u64(word_id_field, item_count.try_into().unwrap());
         doc.add_text(lemma_field, lemma);
         doc.add_text(lexicon_field, lexicon_name);
-        doc.add_text(def_field, item_text_no_tags);
+        doc.add_text(
+            def_field,
+            hgk_strip_diacritics(item_text_no_tags, 0xFFFFFFFF),
+        );
         index_writer.add_document(doc).unwrap();
     }
 
@@ -437,7 +440,7 @@ impl Processor<'_> {
         }
 
         self.index_writer.commit().unwrap();
-        
+
         let query = "VACUUM;";
         let _res = sqlx::query(query).execute(&mut self.db).await;
         Ok(())
