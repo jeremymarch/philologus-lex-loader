@@ -19,6 +19,7 @@ use std::path::Path;
 // use quick_xml::Writer;
 // use quick_xml::events::BytesEnd;
 
+use sqlx::any::install_default_drivers;
 use sqlx::AnyConnection;
 use sqlx::Connection;
 
@@ -66,7 +67,7 @@ impl LexEntryCollector {
 
 fn sanitize_sort_key(str: &str) -> String {
     match str {
-        "σάν" => return "πωω".to_string(),              // after pi
+        "σάν" => return "πωω".to_string(),                // after pi
         "\u{03DE} \u{03DF}" => return "πωωω".to_string(), // koppa and lower case koppa are after san
         _ => (),
     }
@@ -105,7 +106,7 @@ impl Processor<'_> {
             .bind(lemma)
             .bind(sanitize_sort_key(lemma).as_str())
             .bind(def)
-            .execute(&mut *tx)
+            .execute(&mut **tx)
             .await?;
         Ok(())
     }
@@ -497,6 +498,7 @@ async fn main() -> anyhow::Result<()> {
     // let index = Index::create_in_ram(schema.clone());
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
+    install_default_drivers();
     let conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
 
     let unique_hashmap = HashMap::new();
