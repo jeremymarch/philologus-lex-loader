@@ -427,19 +427,19 @@ impl Processor<'_> {
 
         for lex in self.lexica.clone() {
             if lex.pull {
-            if !Path::new(&lex.dir_name).exists() {
-                println!("Cloning {}...", &lex.repo_url);
+                if !Path::new(&lex.dir_name).exists() {
+                    println!("Cloning {}...", &lex.repo_url);
 
-                let _repo = match git2::Repository::clone(lex.repo_url, lex.dir_name) {
-                    Ok(repo) => repo,
-                    Err(e) => panic!("failed to clone: {}", e),
-                };
-            } else if let Ok(repo) = git2::Repository::discover(lex.dir_name) {
-                //else pull: i.e. fetch and merge
-                let mut remote = repo.find_remote(lex.remote).unwrap();
-                let fetch_commit = do_fetch(&repo, &[lex.branch], &mut remote).unwrap();
-                let _ = do_merge(&repo, lex.branch, fetch_commit);
-            }
+                    let _repo = match git2::Repository::clone(lex.repo_url, lex.dir_name) {
+                        Ok(repo) => repo,
+                        Err(e) => panic!("failed to clone: {}", e),
+                    };
+                } else if let Ok(repo) = git2::Repository::discover(lex.dir_name) {
+                    //else pull: i.e. fetch and merge
+                    let mut remote = repo.find_remote(lex.remote).unwrap();
+                    let fetch_commit = do_fetch(&repo, &[lex.branch], &mut remote).unwrap();
+                    let _ = do_merge(&repo, lex.branch, fetch_commit);
+                }
             }
 
             for i in lex.start_rng..=lex.end_rng {
@@ -607,7 +607,11 @@ fn do_fetch<'a>(
     // Always fetch all tags.
     // Perform a download and also update tips
     fo.download_tags(git2::AutotagOption::All);
-    println!("Fetching {} for {}", remote.name().unwrap(), repo.path().display());
+    println!(
+        "Fetching {} for {}",
+        remote.name().unwrap(),
+        repo.path().display()
+    );
     remote.fetch(refs, Some(&mut fo), None)?;
 
     // If there are local objects (we got a thin pack), then tell the user
