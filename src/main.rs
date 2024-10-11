@@ -40,6 +40,7 @@ struct Lexicon<'a> {
     name: &'a str,
     branch: &'a str,
     remote: &'a str,
+    pull: bool,
 }
 
 struct LexEntryCollector {
@@ -133,7 +134,7 @@ impl Processor<'_> {
             .unwrap();
 
         //println!("{} {}", item_count, lemma);
-        let mut doc = Document::default();
+        let mut doc = TantivyDocument::default();
         doc.add_u64(word_id_field, item_count.try_into().unwrap());
         doc.add_text(lemma_field, lemma);
         doc.add_text(lexicon_field, lexicon_name);
@@ -152,7 +153,9 @@ impl Processor<'_> {
     ) -> Result<(), sqlx::Error> {
         //println!("file: {}", file);
         let mut reader = Reader::from_file(file).unwrap();
-        reader.trim_text(false); //false to preserve whitespace
+        reader.config_mut().trim_text(false); //FIX ME: check docs, do we want true here?
+        reader.config_mut().enable_all_checks(true);
+        //reader.trim_text(false); //false to preserve whitespace
 
         let mut buf = Vec::new();
 
@@ -410,7 +413,7 @@ impl Processor<'_> {
     }
 
     async fn start(&mut self) -> Result<(), sqlx::Error> {
-        let query = "CREATE TABLE IF NOT EXISTS words (seq INTEGER PRIMARY KEY, lexicon TEXT, word TEXT, sortword TEXT, def TEXT); \
+        let query = "CREATE TABLE IF NOT EXISTS words (seq INTEGER PRIMARY KEY, lexicon TEXT, word TEXT, sortword TEXT, def TEXT) STRICT; \
         CREATE INDEX IF NOT EXISTS lexicon_idx ON words (lexicon); \
         CREATE INDEX IF NOT EXISTS sortword_idx ON words (sortword); \
         CREATE INDEX IF NOT EXISTS word_idx ON words (word);";
@@ -423,10 +426,11 @@ impl Processor<'_> {
         let mut item_count: i32 = 0;
 
         for lex in self.lexica.clone() {
+            if lex.pull {
             if !Path::new(&lex.dir_name).exists() {
                 println!("Cloning {}...", &lex.repo_url);
 
-                let _repo = match Repository::clone(lex.repo_url, lex.dir_name) {
+                let _repo = match git2::Repository::clone(lex.repo_url, lex.dir_name) {
                     Ok(repo) => repo,
                     Err(e) => panic!("failed to clone: {}", e),
                 };
@@ -435,6 +439,7 @@ impl Processor<'_> {
                 let mut remote = repo.find_remote(lex.remote).unwrap();
                 let fetch_commit = do_fetch(&repo, &[lex.branch], &mut remote).unwrap();
                 let _ = do_merge(&repo, lex.branch, fetch_commit);
+            }
             }
 
             for i in lex.start_rng..=lex.end_rng {
@@ -473,6 +478,7 @@ async fn main() -> anyhow::Result<()> {
         name: "lsj",
         branch: "master",
         remote: "origin",
+        pull: true,
     };
     let ls = Lexicon {
         dir_name: "LewisShortLogeion/",
@@ -483,17 +489,19 @@ async fn main() -> anyhow::Result<()> {
         name: "lewisshort",
         branch: "master",
         remote: "origin",
+        pull: true,
     };
     let slater = Lexicon {
         dir_name: "SlaterPindar/",
         file_name: "pindar_dico",
-        repo_url: "https://github.com/jeremymarch/SlaterPindar",
+        repo_url: "https://github.com/jeremymarch/SlaterPindar.git",
         //repo_url: "https://github.com/helmadik/SlaterPindar.git",
         start_rng: 1,
         end_rng: 24,
         name: "slater",
         branch: "main",
         remote: "origin",
+        pull: false,
     };
 
     let index_path = "tantivy-data"; // TempDir::new()?;
@@ -536,7 +544,7 @@ async fn main() -> anyhow::Result<()> {
 
     let reader = index
         .reader_builder()
-        .reload_policy(ReloadPolicy::OnCommit)
+        .reload_policy(ReloadPolicy::OnCommitWithDelay)
         .try_into()?;
 
     let searcher = reader.searcher();
@@ -550,8 +558,8 @@ async fn main() -> anyhow::Result<()> {
         Ok(query) => match searcher.search(&query, &TopDocs::with_limit(100)) {
             Ok(top_docs) => {
                 for (_score, doc_address) in top_docs {
-                    match searcher.doc(doc_address) {
-                        Ok(retrieved_doc) => println!("{}", schema.to_json(&retrieved_doc)),
+                    match searcher.doc::<TantivyDocument>(doc_address) {
+                        Ok(_retrieved_doc) => println!("success"), //println!("{}", schema.to_json(&retrieved_doc)),
                         Err(e) => println!("Error retrieving document: {:?}", e),
                     }
                 }
@@ -599,7 +607,7 @@ fn do_fetch<'a>(
     // Always fetch all tags.
     // Perform a download and also update tips
     fo.download_tags(git2::AutotagOption::All);
-    println!("Fetching {} for repo", remote.name().unwrap());
+    println!("Fetching {} for {}", remote.name().unwrap(), repo.path().display());
     remote.fetch(refs, Some(&mut fo), None)?;
 
     // If there are local objects (we got a thin pack), then tell the user
