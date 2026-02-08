@@ -4,6 +4,7 @@ use tantivy::collector::TopDocs;
 use tantivy::query::QueryParser;
 use tantivy::schema::*;
 use tantivy::{Index, IndexWriter, ReloadPolicy};
+use tantivy::tokenizer::*;
 // use tempfile::TempDir;
 
 use quick_xml::events::Event;
@@ -22,9 +23,9 @@ use std::path::Path;
 // use quick_xml::Writer;
 // use quick_xml::events::BytesEnd;
 
-use sqlx::any::install_default_drivers;
 use sqlx::AnyConnection;
 use sqlx::Connection;
+use sqlx::any::install_default_drivers;
 
 use polytonic_greek::hgk_strip_diacritics;
 
@@ -140,7 +141,8 @@ impl Processor<'_> {
         doc.add_text(lexicon_field, lexicon_name);
         doc.add_text(
             def_field,
-            hgk_strip_diacritics(item_text_no_tags, 0xFFFFFFFF),
+            //hgk_strip_diacritics(item_text_no_tags, 0xFFFFFFFF),
+            item_text_no_tags
         );
         index_writer.add_document(doc).unwrap();
     }
@@ -504,32 +506,54 @@ async fn main() -> anyhow::Result<()> {
         pull: false,
     };
 
-    let index_path = "tantivy-data"; // TempDir::new()?;
+    let index_path = "tantivy-datav4"; // TempDir::new()?;
     if Path::new(index_path).is_dir() {
         fs::remove_dir_all(index_path).unwrap();
     }
     fs::create_dir(index_path).unwrap();
 
-    let mut schema_builder = Schema::builder();
+    let text_field_indexing = TextFieldIndexing::default()
+        .set_tokenizer("el_stem"); // Use the registered name
+    //.set_index_option(IndexRecordOption::WithFreqsAndPositions);
+    // let lemma_text_options = TextOptions::default()
+    //     //.set_indexing_options(text_field_indexing)
+    //     .set_stored();
+    // let lex_text_options = TextOptions::default()
+    //     //.set_indexing_options(text_field_indexing)
+    //     .set_stored();
+    let def_text_options = TextOptions::default()
+        .set_indexing_options(text_field_indexing)
+        .set_stored();
 
+    let mut schema_builder = Schema::builder();
     let num_options = NumericOptions::default().set_stored().set_indexed();
     schema_builder.add_u64_field("word_id", num_options);
-    schema_builder.add_text_field("lemma", STORED); // lemma is also in definition, so no need to index it separately
-    schema_builder.add_text_field("lexicon", TEXT | STORED);
-    schema_builder.add_text_field("definition", TEXT);
+    schema_builder.add_text_field("lemma", STRING | FAST | STORED); //STORED // lemma is also in definition, so no need to index it separately
+    //schema_builder.add_text_field("lexicon", lex_text_options); //TEXT | STORED
+    schema_builder.add_text_field("lexicon", STRING | FAST | STORED); //doc.add_text(status, "active");
+    schema_builder.add_text_field("definition", def_text_options); // TEXT | STORED
     let schema = schema_builder.build();
 
     let index = Index::create_in_dir(index_path, schema.clone())?;
+    let en_stem_analyzer = TextAnalyzer::builder(SimpleTokenizer::default())
+        //.filter(StopWordFilter::new(Language::Greek))
+        .filter(LowerCaser)
+        .filter(NoDiacritcs)
+        .filter(Stemmer::new(Language::English))
+        .build();
+
+    index.tokenizers().register("el_stem", en_stem_analyzer);
+
     // let index = Index::create_in_ram(schema.clone());
     let index_writer: IndexWriter = index.writer(50_000_000)?;
 
     install_default_drivers();
-    let conn = AnyConnection::connect("sqlite://db.sqlite?mode=rwc").await?;
+    let conn = AnyConnection::connect("sqlite://dbv3.sqlite?mode=rwc").await?;
 
     let unique_hashmap = HashMap::new();
 
     let mut processor = Processor {
-        lexica: vec![lsj, ls, slater],
+        lexica: vec![lsj, ls /* , slater */],
         index_writer,
         db: conn,
         unique_hashmap,
@@ -743,4 +767,83 @@ fn do_merge<'a>(
         println!("Nothing to do...");
     }
     Ok(())
+}
+
+use std::mem;
+
+use tantivy::tokenizer::{Token, TokenFilter, TokenStream, Tokenizer};
+
+/// Token filter that removes diacritics from terms.
+#[derive(Clone)]
+pub struct NoDiacritcs;
+
+impl TokenFilter for NoDiacritcs {
+    type Tokenizer<T: Tokenizer> = DiacriticFilter<T>;
+
+    fn transform<T: Tokenizer>(self, tokenizer: T) -> Self::Tokenizer<T> {
+        DiacriticFilter {
+            tokenizer,
+            buffer: String::new(),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct DiacriticFilter<T> {
+    tokenizer: T,
+    buffer: String,
+}
+
+impl<T: Tokenizer> Tokenizer for DiacriticFilter<T> {
+    type TokenStream<'a> = DiacriticTokenStream<'a, T::TokenStream<'a>>;
+
+    fn token_stream<'a>(&'a mut self, text: &'a str) -> Self::TokenStream<'a> {
+        self.buffer.clear();
+        DiacriticTokenStream {
+            tail: self.tokenizer.token_stream(text),
+            buffer: &mut self.buffer,
+        }
+    }
+}
+
+pub struct DiacriticTokenStream<'a, T> {
+    buffer: &'a mut String,
+    tail: T,
+}
+
+// writes a lowercased version of text into output.
+fn to_diacritic_free_unicode(text: &str, output: &mut String) {
+    output.clear();
+    output.reserve(50);
+    // for c in text.chars() {
+    //     // Contrary to the std, we do not take care of sigma special case.
+    //     // This will have an normalizationo effect, which is ok for search.
+    //     output.extend(c.to_lowercase());
+    // }
+    let stripped = hgk_strip_diacritics(text, 0xFFFFFFFF);
+    output.push_str(&stripped);
+}
+
+impl<T: TokenStream> TokenStream for DiacriticTokenStream<'_, T> {
+    fn advance(&mut self) -> bool {
+        if !self.tail.advance() {
+            return false;
+        }
+        // if self.token_mut().text.is_ascii() {
+        //     // fast track for ascii.
+        //     self.token_mut().text.make_ascii_lowercase();
+        // } else {
+            to_diacritic_free_unicode(&self.tail.token().text, self.buffer);
+            mem::swap(&mut self.tail.token_mut().text, self.buffer);
+            //}
+        true
+    }
+
+    fn token(&self) -> &Token {
+        self.tail.token()
+    }
+
+    fn token_mut(&mut self) -> &mut Token {
+        self.tail.token_mut()
+    }
 }

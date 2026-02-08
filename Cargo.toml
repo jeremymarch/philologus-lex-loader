@@ -1,12 +1,12 @@
 [package]
 name = "tantivy-test"
-version = "2.0.18"
-edition = "2021"
+version = "2.0.19"
+edition = "2024"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tantivy = "0.22.0"
+tantivy = "0.25.0"
 tempfile = "3.13.0"
 quick-xml = "0.36.2"
 git2 = "0.19.0"
